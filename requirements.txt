@@ -3,6 +3,8 @@ requests
 pandas
 numpy
 fastapi
-uvicorn 
-python-multipart 
+uvicorn
+python-multipart
 openpyxl
+openai
+dotenv
