@@ -6,8 +6,7 @@ st.title("Excel File Uploader")
 uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
-    st.write("File uploaded:", uploaded_file.name)
-    if st.button("Send to Backend"):
+    if st.button("Upload File"):
         files = {"file": (uploaded_file.name, uploaded_file, uploaded_file.type)}
         try:
             response = requests.post("http://localhost:8000/uploadfile/", files=files)
