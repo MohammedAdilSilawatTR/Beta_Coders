@@ -8,6 +8,11 @@ from datetime import datetime # Added for datetime conversion
 
 app = FastAPI()
 
+workbook = None # Initialize workbook variable
+final_processed_data_rows = [] # Initialize final processed data rows variable
+header_mapping = {} # Initialize header mapping variable
+actual_headers = [] # Initialize actual headers variable
+
 # Initialize OpenAI client - Assumes OPENAI_API_KEY environment variable is set
 # You might want to add more robust error handling for API key loading in a production app
 try:
@@ -18,7 +23,7 @@ except TypeError:
     print("ERROR: OPENAI_API_KEY environment variable not set.")
     client = None # Or handle this more gracefully
 
-PREDEFINED_COLUMNS = ["amount", "transactionDate", "transactionDescription", "disallowableExpenses"]
+PREDEFINED_COLUMNS = {"amount": "datatype is number", "transactionDate": "datatype is date", "transactionDescription": "datatype is string", "disallowableExpenses": "datatype is number"}
 MAX_SAMPLE_ROWS = 5 # Number of sample data rows to send to LLM for each column
 
 def convert_datetimes_to_string(obj):
@@ -133,19 +138,23 @@ Please provide the mapping as a JSON object.
                 if llm_response_content:
                     header_mapping = json.loads(llm_response_content)
                 else:
-                    # Fallback using actual_headers
-                    header_mapping = {header: None for header in actual_headers} 
-                    print("LLM returned empty content.")
+                    # Consistent fallback: {predefined_column: None}
+                    header_mapping = {predefined_col: None for predefined_col in PREDEFINED_COLUMNS}
+                    print("LLM returned empty content. Using fallback mapping.")
 
             except Exception as llm_e:
                 print(f"Error calling OpenAI or parsing response: {llm_e}")
-                # Fallback: create a null mapping if LLM fails
-                header_mapping = {header: None for header in actual_headers}
+                # Consistent fallback: {predefined_column: None}
+                header_mapping = {predefined_col: None for predefined_col in PREDEFINED_COLUMNS}
         
-        elif not client:
-            print("OpenAI client not initialized. Skipping LLM mapping.")
-            # Fallback using actual_headers
-            header_mapping = {header: "OpenAI client not initialized" for header in actual_headers}
+        elif not client or not actual_headers: # Modified condition to also check actual_headers
+            if not client:
+                print("OpenAI client not initialized. Skipping LLM mapping.")
+            if not actual_headers:
+                print("No actual headers found. Skipping LLM mapping.")
+            # Consistent fallback: {predefined_column: "Client/Headers Issue"}
+            # Or simply None, but a string message might be more informative for this specific case
+            header_mapping = {predefined_col: "OpenAI client not initialized or no headers" for predefined_col in PREDEFINED_COLUMNS}
 
 
         # Convert datetimes in processed_data_rows before returning
