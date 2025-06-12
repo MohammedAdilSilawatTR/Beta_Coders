@@ -1,10 +1,19 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from pydantic import BaseModel
+from typing import List, Dict, Any
 import openpyxl
 import json
 from openai import OpenAI
 import os # For API Key
 from dotenv import load_dotenv
 from datetime import datetime # Added for datetime conversion
+
+# Attempt to import the categorization function
+try:
+    from agentic import get_transaction_category
+except ImportError:
+    print("WARN: agentic.py or get_transaction_category not found. Categorization endpoint will not work.")
+    get_transaction_category = None
 
 app = FastAPI()
 
@@ -107,7 +116,7 @@ async def create_upload_file(
             prompt_messages = [
                 {
                     "role": "system",
-                    "content": "You are an expert data mapping assistant. Your task is to map user-provided Excel column headers to a predefined list of standard column names. You will be given the user's headers, sample data from each of their columns, and the list of predefined standard columns. Return your mapping as a JSON object where keys are the predefined standard columns and values are the matched user headers. If no good match is found for a user header, use null as its value."
+                    "content": "You are an expert data mapping assistant. Your task is to map user-provided Excel column headers to a predefined list of standard column names. You will be given the user's headers, sample data from each of their columns, and the list of predefined standard columns. Remember amount will be greater than disallowableExpenses. Return your mapping as a JSON object where keys are the predefined standard columns and values are the matched user headers. If no good match is found for a user header, use null as its value."
                 },
                 {
                     "role": "user",
@@ -169,3 +178,61 @@ Please provide the mapping as a JSON object.
     except Exception as e:
         print(f"Error in file processing: {e}")
         return {"error": str(e), "details": "Error during file processing or LLM interaction."}
+
+# Pydantic models for the new endpoint
+class TransactionData(BaseModel):
+    transactionDescription: str | None = None # Making it optional in case it's missing
+    # Include other fields from PREDEFINED_COLUMNS if needed by the agent or for context,
+    # or allow any other fields by using Dict[str, Any]
+    amount: float | int | None = None
+    transactionDate: str | None = None
+    disallowableExpenses: float | int | None = None
+    # Allow other arbitrary fields that might be in the mapped_transactions
+    class Config:
+        extra = "allow"
+
+class CategorizationRequest(BaseModel):
+    business_description: str
+    mapped_transactions: List[Dict[str, Any]] # Using Dict for flexibility from frontend
+
+@app.post("/categorize-transactions/")
+async def categorize_transactions_endpoint(request: CategorizationRequest):
+    if not get_transaction_category:
+        raise HTTPException(status_code=501, detail="Categorization service is not available due to import error.")
+
+    categorized_transactions = []
+    for transaction in request.mapped_transactions:
+        # Ensure transactionDescription exists and is a string
+        desc = transaction.get("transactionDescription")
+        if not isinstance(desc, str) or not desc.strip():
+            # Handle missing or empty transaction description
+            # Option 1: Skip categorization for this transaction
+            # Option 2: Assign a default category like "Missing Description"
+            # Option 3: Return an error or include a note in the response
+            # For now, let's add it with a default category or skip, depending on strictness.
+            # Here, we'll add it with a note that it couldn't be categorized.
+            categorized_transaction = transaction.copy()
+            categorized_transaction["category"] = "Missing or Invalid Description"
+            categorized_transactions.append(categorized_transaction)
+            print(f"Skipping categorization for transaction due to missing/invalid description: {transaction}")
+            continue
+
+        try:
+            print(f"Categorizing transaction: '{desc}' for business: '{request.business_description}'")
+            category = get_transaction_category(
+                business_query=request.business_description,
+                transaction_description_text=desc
+            )
+            categorized_transaction = transaction.copy() # Start with original transaction data
+            categorized_transaction["category"] = category # Add the new category
+            categorized_transactions.append(categorized_transaction)
+        except Exception as e:
+            print(f"Error categorizing transaction '{desc}': {e}")
+            # Handle error for individual transaction, e.g., add it with an error category
+            categorized_transaction = transaction.copy()
+            categorized_transaction["category"] = f"Error: {str(e)}"
+            categorized_transactions.append(categorized_transaction)
+            # Optionally, re-raise if one error should stop the whole process,
+            # or collect errors and return them. For now, we continue.
+
+    return categorized_transactions
