@@ -37,29 +37,30 @@ uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
     if st.button("Upload and Map Headers"):
+        # Reset categorized display and summary when new file is uploaded or remapped
+        st.session_state.df_categorized_display = pd.DataFrame()
+        st.session_state.df_category_summary = pd.DataFrame()
+        st.session_state.df_display = pd.DataFrame() # Also reset mapped data table
+        st.session_state.transformed_data_for_table = []
+        
         files = {"file": (uploaded_file.name, uploaded_file, uploaded_file.type)}
-        # Prepare data payload for form fields, using business_description from session state
         data = {"business_description": st.session_state.business_description}
 
         try:
-            start_time_mapping = time.time() # Start timer for mapping
+            start_time_mapping = time.time()
             with st.spinner("Processing file and mapping headers..."):
                 response = requests.post("http://localhost:8000/uploadfile/", files=files, data=data)
-            end_time_mapping = time.time() # End timer for mapping
+            end_time_mapping = time.time()
             mapping_duration = end_time_mapping - start_time_mapping
             
             if response.status_code == 200:
-                st.info(f"Header mapping completed in {mapping_duration:.2f} seconds.") # Display time taken
+                st.info(f"Header mapping completed in {mapping_duration:.2f} seconds.")
                 st.success("File processed successfully!")
                 
                 response_data = response.json()
-                # Store in session state
                 st.session_state.original_excel_headers = response_data.get("headers", []) 
                 st.session_state.data_rows = response_data.get("non_empty_rows", []) 
                 st.session_state.llm_header_mapping = response_data.get("header_mapping", {})
-
-                # NOTE: The display logic for LLM Header Mapping will be moved outside this button's scope
-                # to ensure it persists across reruns.
 
                 if not st.session_state.data_rows:
                     st.info("No data rows received from backend to display.")
@@ -102,54 +103,33 @@ if uploaded_file is not None:
                             df[date_column_name] = pd.to_datetime(df[date_column_name], errors='coerce')
                             if pd.api.types.is_datetime64_any_dtype(df[date_column_name]):
                                 df[date_column_name] = df[date_column_name].dt.strftime('%d/%m/%Y').fillna('')
-                        
-                        st.session_state.df_display = df # Store dataframe in session state
+                        st.session_state.df_display = df
                     else:
-                        st.info("Could not transform data for table display (e.g., mapping issues led to empty data).")
+                        st.info("Could not transform data for table display.")
                         st.session_state.df_display = pd.DataFrame()
             else:
                 st.error(f"Failed to process file: {response.status_code} - {response.text}")
                 st.session_state.transformed_data_for_table = []
                 st.session_state.df_display = pd.DataFrame()
-
         except requests.exceptions.RequestException as e:
             st.error(f"Error connecting to backend: {e}")
-            st.session_state.transformed_data_for_table = []
-            st.session_state.df_display = pd.DataFrame()
         except Exception as e:
             st.error(f"An unexpected error occurred: {e}")
-            st.session_state.transformed_data_for_table = []
-            st.session_state.df_display = pd.DataFrame()
 
-# Display LLM Header Mapping if it exists in session state
+# Display LLM Header Mapping if it exists
 if 'llm_header_mapping' in st.session_state and st.session_state.llm_header_mapping:
-    st.subheader("LLM Header Mapping:") # Changed subheader slightly for clarity
-    # Convert mapping to a list of dictionaries for DataFrame creation
+    st.subheader("LLM Header Mapping:")
     mapping_list_for_df = [{"Predefined Column": key, "Mapped Excel Header": value} 
                            for key, value in st.session_state.llm_header_mapping.items()]
     df_mapping = pd.DataFrame(mapping_list_for_df)
     st.dataframe(df_mapping, width=500)
 
-# This section is now outside the "Upload and Map Headers" button's conditional block
-# It will run on every script rerun, displaying data if it exists in session_state
-
-if not st.session_state.df_display.empty:
+# Display Column Mapped Data Table if it exists
+if 'df_display' in st.session_state and not st.session_state.df_display.empty:
     st.subheader("Column Mapped Data Table:")
-    # Ensure columns are displayed in the order derived from LLM mapping keys plus 'Category' if it exists
-    llm_cols = list(st.session_state.llm_header_mapping.keys())
-    display_df_cols = [col for col in llm_cols if col in st.session_state.df_display.columns]
-    if 'Category' in st.session_state.df_display.columns and 'Category' not in display_df_cols:
-        display_df_cols.append('Category') # Add Category column if it exists and not already included
+    st.dataframe(st.session_state.df_display)
 
-    if display_df_cols:
-        st.dataframe(st.session_state.df_display[display_df_cols])
-    else:
-        # This case should ideally not be hit if df_display is not empty,
-        # but as a fallback:
-        st.dataframe(st.session_state.df_display)
-
-
-    # Add "Categorize Transactions" button
+    # Add "Categorize Transactions" button only if there's mapped data
     if st.button("Categorize Transactions"):
         if not st.session_state.business_description.strip():
             st.warning("Please enter a business description for categorization.")
@@ -161,80 +141,100 @@ if not st.session_state.df_display.empty:
                 "mapped_transactions": st.session_state.transformed_data_for_table 
             }
             try:
-                start_time_categorization = time.time() # Start timer for categorization
+                start_time_categorization = time.time()
                 with st.spinner("Categorizing transactions..."):
                     categorize_response = requests.post("http://localhost:8000/categorize-transactions/", json=payload)
-                end_time_categorization = time.time() # End timer for categorization
+                end_time_categorization = time.time()
                 categorization_duration = end_time_categorization - start_time_categorization
                 
                 if categorize_response.status_code == 200:
-                    st.info(f"Transaction categorization completed in {categorization_duration:.2f} seconds.") # Display time taken
+                    st.info(f"Transaction categorization completed in {categorization_duration:.2f} seconds.")
                     st.success("Transactions categorized successfully!")
-                    try:
-                        categorized_data = categorize_response.json()
-                    except json.JSONDecodeError as json_e:
-                        st.error(f"Failed to parse JSON response from backend: {json_e}")
-                        st.exception(json_e)
-                        categorized_data = None
-
+                    categorized_data = categorize_response.json()
                     if categorized_data:
-                        try:
-                            df_updated = pd.DataFrame(categorized_data)
-                        except Exception as df_e:
-                            st.error(f"Failed to create DataFrame from categorized_data: {df_e}")
-                            st.exception(df_e)
-                            df_updated = None
-
-                        if df_updated is not None:
-                            date_column_name = "transactionDate"
-                            if date_column_name in df_updated.columns:
-                                try:
-                                    df_updated[date_column_name] = df_updated[date_column_name].astype(str) 
-                                    df_updated[date_column_name] = pd.to_datetime(df_updated[date_column_name], errors='coerce')
-                                    if pd.api.types.is_datetime64_any_dtype(df_updated[date_column_name]):
-                                         df_updated[date_column_name] = df_updated[date_column_name].dt.strftime('%d/%m/%Y').fillna('')
-                                except Exception as date_fmt_e:
-                                    st.error(f"Error formatting date column '{date_column_name}': {date_fmt_e}")
-                                    st.exception(date_fmt_e)
-                            
-                            st.session_state.df_categorized_display = df_updated # Assign to new session state for categorized table
-                            # st.rerun() is removed/commented by user
+                        df_updated = pd.DataFrame(categorized_data)
+                        date_column_name = "transactionDate"
+                        if date_column_name in df_updated.columns:
+                            try:
+                                df_updated[date_column_name] = pd.to_datetime(df_updated[date_column_name], errors='coerce').dt.strftime('%d/%m/%Y').fillna('')
+                            except Exception as date_fmt_e:
+                                st.error(f"Error formatting date column '{date_column_name}': {date_fmt_e}")
+                        st.session_state.df_categorized_display = df_updated
+                    else:
+                        st.session_state.df_categorized_display = pd.DataFrame() 
                 else:
                     st.error(f"Failed to categorize transactions: {categorize_response.status_code} - {categorize_response.text}")
+                    st.session_state.df_categorized_display = pd.DataFrame()
             except requests.exceptions.RequestException as e:
                 st.error(f"Error connecting to backend for categorization: {e}")
-                st.exception(e)
+                st.session_state.df_categorized_display = pd.DataFrame()
             except Exception as e:
                 st.error(f"An unexpected error occurred during categorization: {e}")
-                st.exception(e)
+                st.session_state.df_categorized_display = pd.DataFrame()
 
-elif uploaded_file and not st.session_state.transformed_data_for_table and st.session_state.llm_header_mapping:
-    # This case handles when upload was successful but resulted in no data to transform/display
-    # The specific info/error messages would have been shown during the upload process.
-    # We ensure the "Categorize Transactions" button doesn't show if there's nothing to categorize.
-    # An st.info message might have already been displayed during the upload process.
-    pass
+# Display the categorized data table (editable) if it exists and process edits
+if 'df_categorized_display' in st.session_state and \
+   isinstance(st.session_state.df_categorized_display, pd.DataFrame) and \
+   not st.session_state.df_categorized_display.empty:
+    
+    st.subheader("Categorized Data Table (Editable Categories):")
+    
+    ALL_POSSIBLE_CATEGORIES = sorted(list(set([
+        "General Administration Expenses", "Turnover", "Premises Costs", 
+        "Legal and Professional Costs", "Advertising and Promotion Costs", 
+        "Other Business Expenses", "Travel and Subsistence", "Subcontractor Expense", 
+        "Other Direct Costs", "Motor Expenses", "Business Entertainment Costs", 
+        "Employee Costs", "Depreciation", "Bad Debts", "Interest", "Other Income", 
+        "Cost of Goods", "Personal", "Repairs",
+        "Uncategorized", "Missing or Invalid Description", "Error in Categorization"
+    ])))
 
-# Display the categorized data table if it exists
-if 'df_categorized_display' in st.session_state and not st.session_state.df_categorized_display.empty:
-    st.subheader("Categorized Data Table:")
-    st.dataframe(st.session_state.df_categorized_display)
+    column_configuration = {
+        "category": st.column_config.SelectboxColumn(
+            "Category",
+            help="Select the correct category for the transaction",
+            options=ALL_POSSIBLE_CATEGORIES,
+            required=True 
+        )
+    }
+    # Make other columns non-editable
+    for col_name in st.session_state.df_categorized_display.columns:
+        if col_name.lower() != 'category':
+            column_configuration[col_name] = st.column_config.TextColumn(col_name, disabled=True)
 
-    # Calculate and store category summary
+    edited_df = st.data_editor(
+        st.session_state.df_categorized_display, # Input for the editor for this run
+        column_config=column_configuration,
+        num_rows="fixed",
+        key="category_editor_table_final_v2", # Unique key
+        use_container_width=True
+    )
+
+    # Update session state for the *next* rerun with the data from the editor.
+    # And use edited_df for calculations in *this* rerun.
+    st.session_state.df_categorized_display = edited_df
+
+    # Calculate summary based on the DIRECT output of data_editor (edited_df)
     try:
-        df_summary = st.session_state.df_categorized_display.copy()
-        # Ensure 'amount' column exists and is numeric for summation
-        if 'amount' in df_summary.columns:
-            df_summary['amount'] = pd.to_numeric(df_summary['amount'], errors='coerce').fillna(0)
-            category_summary = df_summary.groupby('category')['amount'].sum().reset_index()
-            category_summary.columns = ['Category', 'Total Amount'] # Rename columns
-            st.session_state.df_category_summary = category_summary
+        if edited_df is not None and isinstance(edited_df, pd.DataFrame):
+            current_df_for_summary = edited_df.copy() 
+            if 'amount' in current_df_for_summary.columns and 'category' in current_df_for_summary.columns:
+                current_df_for_summary['amount'] = pd.to_numeric(current_df_for_summary['amount'], errors='coerce').fillna(0)
+                category_summary_df = current_df_for_summary.groupby('category')['amount'].sum().reset_index()
+                category_summary_df.columns = ['Category', 'Total Amount']
+                st.session_state.df_category_summary = category_summary_df
+            elif 'category' not in current_df_for_summary.columns:
+                st.warning("The 'category' column is missing in edited data, cannot calculate category summary.")
+                st.session_state.df_category_summary = pd.DataFrame() 
+            else: 
+                st.warning("The 'amount' column is missing in edited data, cannot calculate category summary.")
+                st.session_state.df_category_summary = pd.DataFrame()
         else:
-            st.warning("The 'amount' column is missing, cannot calculate category summary.")
-            st.session_state.df_category_summary = pd.DataFrame() # Clear or set to empty
+            st.warning("Data editor did not return valid data for summary.")
+            st.session_state.df_category_summary = pd.DataFrame()
     except Exception as e:
         st.error(f"Error calculating category summary: {e}")
-        st.session_state.df_category_summary = pd.DataFrame() # Clear or set to empty
+        st.session_state.df_category_summary = pd.DataFrame()
 
 # Display the category summary table if it exists
 if 'df_category_summary' in st.session_state and not st.session_state.df_category_summary.empty:
