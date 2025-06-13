@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd # Import pandas for DataFrame
 import json # Added import
-import json
+import time # Added import for time tracking
 
 st.set_page_config(page_title="Smart AI Mapping", page_icon="🤖", layout="wide")
 
@@ -40,10 +40,14 @@ if uploaded_file is not None:
         data = {"business_description": st.session_state.business_description}
 
         try:
+            start_time_mapping = time.time() # Start timer for mapping
             with st.spinner("Processing file and mapping headers..."):
                 response = requests.post("http://localhost:8000/uploadfile/", files=files, data=data)
+            end_time_mapping = time.time() # End timer for mapping
+            mapping_duration = end_time_mapping - start_time_mapping
             
             if response.status_code == 200:
+                st.info(f"Header mapping completed in {mapping_duration:.2f} seconds.") # Display time taken
                 st.success("File processed successfully!")
                 
                 response_data = response.json()
@@ -146,10 +150,14 @@ if not st.session_state.df_display.empty:
                 "mapped_transactions": st.session_state.transformed_data_for_table 
             }
             try:
+                start_time_categorization = time.time() # Start timer for categorization
                 with st.spinner("Categorizing transactions..."):
                     categorize_response = requests.post("http://localhost:8000/categorize-transactions/", json=payload)
+                end_time_categorization = time.time() # End timer for categorization
+                categorization_duration = end_time_categorization - start_time_categorization
                 
                 if categorize_response.status_code == 200:
+                    st.info(f"Transaction categorization completed in {categorization_duration:.2f} seconds.") # Display time taken
                     st.success("Transactions categorized successfully!")
                     try:
                         categorized_data = categorize_response.json()
