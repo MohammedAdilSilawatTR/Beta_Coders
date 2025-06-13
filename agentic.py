@@ -1,7 +1,8 @@
-from typing import TypedDict
+from typing import TypedDict, List, Dict # Added List, Dict
 from langgraph.graph import StateGraph, END
 from openai import OpenAI
 import os
+import json # Added json
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file if it exists
@@ -39,7 +40,7 @@ Do not assume or infer details not explicitly mentioned in the text.
 Ensure the categorization is based solely on the business-related content.
 
 Output: Clearly state the category the text belongs to: Salon, Tutor, Architectural, or Uncategorized.
-only one word answer of business category
+Only return a single word: "Salon", "Tutor", "Architectural", or "Uncategorized".
 
 Input : """
 
@@ -102,10 +103,21 @@ Output:
 
 Example:
 
-transaction_description: "Payment to Ryman UK for printer paper" 
-General Administration Expenses
+Input:
+["Payment to Ryman UK for printer paper", "Invoice for CAD software subscription"]
 
-Input : 
+Output:
+{
+  "Payment to Ryman UK for printer paper": "General Administration Expenses",
+  "Invoice for CAD software subscription": "General Administration Expenses"
+}
+
+Task Instruction:
+- Analyze the list of transaction_descriptions provided and determine the most relevant category for each from the list above.
+- Return a single JSON object where each key is one of the transaction descriptions from the input list, and its value is the predicted category string.
+- Ensure the output is a valid JSON object. Do not add any explanatory text before or after the JSON object.
+
+Input: (This will be a JSON string list of transaction descriptions)
 """
 
 salon_agent_instruction = """Persona:
@@ -166,12 +178,21 @@ Output:
 For each transaction_description, provide the predicted category in a clear and concise format. Directly Return Category in string.
 Example:
 
-transaction_description: "Client payment for haircut and styling" 
-Turnover
+Input:
+["Client payment for haircut and styling", "Purchase of L'Oreal hair dye"]
 
-Input : 'It is transaction_description provided by user'
+Output:
+{
+  "Client payment for haircut and styling": "Turnover",
+  "Purchase of L'Oreal hair dye": "Cost of Goods"
+}
 
-Input : 
+Task Instruction:
+- Analyze the list of transaction_descriptions provided and determine the most relevant category for each from the list above.
+- Return a single JSON object where each key is one of the transaction descriptions from the input list, and its value is the predicted category string.
+- Ensure the output is a valid JSON object. Do not add any explanatory text before or after the JSON object.
+
+Input: (This will be a JSON string list of transaction descriptions)
 """
 
 tutor_agent_instruction = """Persona:
@@ -214,9 +235,9 @@ Other Income: Income from sources other than core tutoring services, such as sal
 
 Task Instruction:
 
-Analyze the transaction_description provided and determine the most relevant category from the list above. Consider the context and keywords within the description to make your prediction. Each transaction should be assigned to exactly one category.
+Analyze the transaction_descriptions provided and determine the most relevant categories from the list above. Consider the context and keywords within the description to make your prediction. Each transaction should be assigned to exactly one category.
 
-Try to categorize the description according to the given categories, ensuring that the 'Other' category is always assigned the lowest priority.
+Try to categorize the descriptions according to the given categories, ensuring that the 'Other' category is always assigned the lowest priority.
 
 Other Instruction:
 
@@ -224,23 +245,34 @@ Ensure high accuracy by considering both explicit and implicit indicators within
 Use natural language processing techniques to enhance understanding and prediction accuracy. Provide feedback on predictions to improve model performance over time.
 Output:
 
-For each transaction_description, provide the predicted category in a clear and concise format. Directly Return Category in string.
+For each transaction_description, provide the predicted category in a clear and concise format. Directly Return json reply with key as description and value as category.
 
 Example:
 
-transaction_description: "Payment from Jane Smith for online class" 
-Turnover
+Input:
+["Payment from Jane Smith for online class", "Subscription to Zoom for teaching"]
 
-Input : 'It is transaction_description provided by user'
- """
+Output:
+{
+  "Payment from Jane Smith for online class": "Turnover",
+  "Subscription to Zoom for teaching": "Other Direct Costs"
+}
+
+Task Instruction:
+- Analyze the list of transaction_descriptions provided and determine the most relevant category for each from the list above.
+- Return a single JSON object where each key is one of ઉthe transaction descriptions from the input list, and its value is the predicted category string.
+- Ensure the output is a valid JSON object. Do not add any explanatory text before or after the JSON object.
+
+Input: (This will be a JSON string list of transaction descriptions)
+"""
 
 
 # Define the state schema for your graph
 class GraphState(TypedDict):
-    original_query: str
-    intent: str
-    task_result: str
-    transaction_description: str
+    original_query: str  # Business description
+    intent: str          # Identified business intent
+    transaction_descriptions: List[str]  # List of transaction descriptions to categorize
+    categorization_results: Dict[str, str] # Map of {description: category}
 
 
 def intent_identification_agent_node(state: GraphState) -> dict:
@@ -260,91 +292,98 @@ def intent_identification_agent_node(state: GraphState) -> dict:
 
 def architectural_agent_node(state: GraphState) -> dict:
     print("---NODE: Architectural Agent---")
-    transaction_description = state.get("transaction_description", "")
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": architectural_agent_instruction},
-            {"role": "user", "content": transaction_description},
-        ],
-    )
-    task_result = response.choices[0].message.content.strip()
-    print(f"Architectural Agent Response: {task_result}")
-    return {"task_result": task_result}
+    descriptions = state.get("transaction_descriptions", [])
+    if not descriptions:
+        print("Architectural Agent: No descriptions to categorize.")
+        return {"categorization_results": {}}
+    
+    user_content = json.dumps(descriptions)
+    print(f"Architectural Agent sending to LLM: {user_content}")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": architectural_agent_instruction},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"}
+        )
+        response_content = response.choices[0].message.content.strip()
+        print(f"Architectural Agent LLM raw response: {response_content}")
+        categorization_results = json.loads(response_content)
+        print(f"Architectural Agent Parsed Response: {categorization_results}")
+        return {"categorization_results": categorization_results}
+    except Exception as e:
+        print(f"Error in Architectural Agent: {e}")
+        # Fallback: mark all as "Error in Categorization" for this agent
+        return {"categorization_results": {desc: "Error in Categorization" for desc in descriptions}}
 
 
 def salon_agent_node(state: GraphState) -> dict:
     print("---NODE: Salon Agent---")
-    transaction_description = state.get("transaction_description", "")
-    print(f"Transaction Description: {transaction_description}")
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": salon_agent_instruction},
-            {"role": "user", "content": transaction_description},
-        ],
-    )
-    task_result = response.choices[0].message.content.strip()
-    print(f"Salon Agent Response: {task_result}")
-    return {"task_result": task_result}
+    descriptions = state.get("transaction_descriptions", [])
+    if not descriptions:
+        print("Salon Agent: No descriptions to categorize.")
+        return {"categorization_results": {}}
+
+    user_content = json.dumps(descriptions)
+    print(f"Salon Agent sending to LLM: {user_content}")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": salon_agent_instruction},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"}
+        )
+        response_content = response.choices[0].message.content.strip()
+        print(f"Salon Agent LLM raw response: {response_content}")
+        categorization_results = json.loads(response_content)
+        print(f"Salon Agent Parsed Response: {categorization_results}")
+        return {"categorization_results": categorization_results}
+    except Exception as e:
+        print(f"Error in Salon Agent: {e}")
+        return {"categorization_results": {desc: "Error in Categorization" for desc in descriptions}}
 
 
 def tutor_agent_node(state: GraphState) -> dict:
     print("---NODE: Tutor Agent---")
-    transaction_description = state.get("transaction_description", "")
-    print(f"Transaction Description: {transaction_description}")
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": tutor_agent_instruction},
-            {"role": "user", "content": transaction_description},
-        ],
-    )
-    task_result = response.choices[0].message.content.strip()
-    print(f"Tutor Agent Response: {task_result}")
-    return {"task_result": task_result}
+    descriptions = state.get("transaction_descriptions", [])
+    if not descriptions:
+        print("Tutor Agent: No descriptions to categorize.")
+        return {"categorization_results": {}}
 
+    user_content = json.dumps(descriptions)
+    print(f"Tutor Agent sending to LLM: {user_content}")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": tutor_agent_instruction},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"}
+        )
+        response_content = response.choices[0].message.content.strip()
+        print(f"Tutor Agent LLM raw response: {response_content}")
+        categorization_results = json.loads(response_content)
+        print(f"Tutor Agent Parsed Response: {categorization_results}")
+        return {"categorization_results": categorization_results}
+    except Exception as e:
+        print(f"Error in Tutor Agent: {e}")
+        return {"categorization_results": {desc: "Error in Categorization" for desc in descriptions}}
 
-def main():
-    workflow = StateGraph(GraphState)
-    workflow.add_node("Intent Identification Agent", intent_identification_agent_node)
-    workflow.add_node("Architectural Agent", architectural_agent_node)
-    workflow.add_node("Salon Agent", salon_agent_node)
-    workflow.add_node("Tutor Agent", tutor_agent_node)
-    workflow.add_conditional_edges(
-        "Intent Identification Agent",
-        lambda state: state["intent"],
-        {
-            "salon": "Salon Agent",
-            "tutor": "Tutor Agent",
-            "architectural": "Architectural Agent",
-        },
-    )
-    workflow.set_entry_point("Intent Identification Agent")
-    workflow.add_edge("Architectural Agent", END)
-    workflow.add_edge("Salon Agent", END)
-    workflow.add_edge("Tutor Agent", END)
-
-    app = workflow.compile()
-    print("\n---RUNNING THE GRAPH---")
-    inputs = {
-        "original_query": "I have barber Shop in my area and this is my shops tax statement can you please categorize it",
-        "transaction_description": "Electricity bill",
-    }
-    for event in app.stream(inputs):
-        for node_name, output_value in event.items():
-            print(f"Output from node '{node_name}': {output_value}")
-    print("---GRAPH EXECUTION COMPLETE---")
 
 # Compile the workflow globally so it's done once when the module is imported
-workflow = StateGraph(GraphState)
-workflow.add_node("Intent Identification Agent", intent_identification_agent_node)
-workflow.add_node("Architectural Agent", architectural_agent_node)
-workflow.add_node("Salon Agent", salon_agent_node)
-workflow.add_node("Tutor Agent", tutor_agent_node)
-workflow.add_conditional_edges(
+graph_builder = StateGraph(GraphState) 
+graph_builder.add_node("Intent Identification Agent", intent_identification_agent_node)
+graph_builder.add_node("Architectural Agent", architectural_agent_node)
+graph_builder.add_node("Salon Agent", salon_agent_node)
+graph_builder.add_node("Tutor Agent", tutor_agent_node)
+graph_builder.add_conditional_edges(
     "Intent Identification Agent",
-    lambda state: state["intent"],
+    lambda state: state.get("intent", "").lower(), # Ensure intent is lowercased and handle if None
     {
         "salon": "Salon Agent",
         "tutor": "Tutor Agent",
@@ -352,38 +391,97 @@ workflow.add_conditional_edges(
         "uncategorized": END # If intent is uncategorized, end the flow.
     },
 )
-workflow.set_entry_point("Intent Identification Agent")
-workflow.add_edge("Architectural Agent", END)
-workflow.add_edge("Salon Agent", END)
-workflow.add_edge("Tutor Agent", END)
+graph_builder.set_entry_point("Intent Identification Agent")
+graph_builder.add_edge("Architectural Agent", END)
+graph_builder.add_edge("Salon Agent", END)
+graph_builder.add_edge("Tutor Agent", END)
 
-compiled_app = workflow.compile()
+compiled_app = graph_builder.compile()
 
-def get_transaction_category(business_query: str, transaction_description_text: str) -> str:
+def get_batch_categories(business_query: str, descriptions_list: List[str]) -> Dict[str, str]:
     """
-    Runs the agentic workflow to categorize a transaction description based on a business query.
+    Runs the agentic workflow to categorize a batch of transaction descriptions based on a business query.
+    Returns a dictionary mapping each description to its category.
     """
-    print(f"\n---RUNNING AGENTIC GRAPH FOR CATEGORIZATION---")
+    print(f"\n---RUNNING AGENTIC GRAPH FOR BATCH CATEGORIZATION---")
+    if not descriptions_list:
+        print("No descriptions provided for batch categorization.")
+        return {}
+
     inputs = {
         "original_query": business_query,
-        "transaction_description": transaction_description_text,
+        "transaction_descriptions": descriptions_list,
+        "categorization_results": {} # Initialize
     }
-    final_result = "Uncategorized" # Default if no specific agent provides a result
+    
+    final_category_map: Dict[str, str] = {}
+
     for event in compiled_app.stream(inputs):
         for node_name, output_value in event.items():
             print(f"Output from node '{node_name}': {output_value}")
-            if node_name in ["Architectural Agent", "Salon Agent", "Tutor Agent"]:
-                if output_value and "task_result" in output_value:
-                    final_result = output_value["task_result"]
-            elif node_name == "Intent Identification Agent":
-                if output_value and output_value.get("intent") == "uncategorized":
-                    # If intent is uncategorized, we might not reach a specific agent node.
-                    # The final_result remains "Uncategorized" as set by default.
-                    print("Intent is uncategorized, transaction will be marked as Uncategorized.")
-                    # No need to break here, let the graph naturally end.
-    
-    print(f"---AGENTIC GRAPH EXECUTION COMPLETE. CATEGORY: {final_result}---")
-    return final_result
+            if node_name == "Intent Identification Agent":
+                current_intent = output_value.get("intent", "").lower()
+                if current_intent == "uncategorized":
+                    print("Intent is uncategorized. All descriptions in batch marked as Uncategorized.")
+                    final_category_map = {desc: "Uncategorized" for desc in descriptions_list}
+                    # The graph will end due to the conditional edge.
+            elif node_name in ["Architectural Agent", "Salon Agent", "Tutor Agent"]:
+                if output_value and "categorization_results" in output_value:
+                    # Merge results, prioritizing agent's output
+                    # This handles cases where some descriptions might not be in the agent's map
+                    # or if the agent returns an incomplete map.
+                    agent_map = output_value["categorization_results"]
+                    current_batch_map = {desc: "Uncategorized" for desc in descriptions_list} # Default all
+                    current_batch_map.update(agent_map) # Update with agent's results
+                    final_category_map = current_batch_map
+            
+    # If the graph ended due to 'uncategorized' intent, final_category_map is already set.
+    # If it went through an agent, final_category_map is set by the agent's output.
+    # If for some reason final_category_map is still empty (e.g., unexpected graph flow or error before agent node),
+    # ensure all descriptions get a default category.
+    if not final_category_map and descriptions_list:
+         final_category_map = {desc: "Uncategorized" for desc in descriptions_list}
+    elif descriptions_list: # Ensure all descriptions from input list are covered
+        for desc_key in descriptions_list:
+            if desc_key not in final_category_map:
+                final_category_map[desc_key] = "Uncategorized" # Default for any missing keys
+
+    print(f"---AGENTIC GRAPH EXECUTION COMPLETE. CATEGORY MAP: {final_category_map}---")
+    return final_category_map
 
 if __name__ == "__main__":
-    main()
+    # Test the batch categorization
+    test_business_query_salon = "This is a hair salon."
+    test_descriptions_salon = [
+        "Payment for shampoo and conditioner supplies",
+        "Client payment for hair coloring service",
+        "Rent for salon premises",
+        "Facebook ad campaign for new styles",
+        "This is an unknown item"
+    ]
+    
+    results_salon = get_batch_categories(test_business_query_salon, test_descriptions_salon)
+    print("\n---FINAL BATCH SALON CATEGORIZATION RESULTS (main test)---")
+    for desc, category in results_salon.items():
+        print(f"Description: '{desc}' -> Category: '{category}'")
+
+    test_business_query_arch = "Architectural design firm"
+    test_descriptions_arch = ["CAD software license renewal", "Client consultation fee for new building project", "Travel to site visit"]
+    results_arch = get_batch_categories(test_business_query_arch, test_descriptions_arch)
+    print("\n---FINAL BATCH ARCH CATEGORIZATION RESULTS (main test)---")
+    for desc, category in results_arch.items():
+        print(f"Description: '{desc}' -> Category: '{category}'")
+
+    test_business_query_uncat = "A general store that sells various items."
+    test_descriptions_uncat = ["Purchase of stock for shelves", "Sale of goods to customer", "Utility bill for the store"]
+    results_uncat = get_batch_categories(test_business_query_uncat, test_descriptions_uncat)
+    print("\n---FINAL BATCH UNCAT CATEGORIZATION RESULTS (main test)---")
+    for desc, category in results_uncat.items():
+        print(f"Description: '{desc}' -> Category: '{category}'")
+
+    test_business_query_tutor = "Online math tutoring services"
+    test_descriptions_tutor = ["Payment from student John Doe", "Subscription for online whiteboard tool", "Advertisement on education portal"]
+    results_tutor = get_batch_categories(test_business_query_tutor, test_descriptions_tutor)
+    print("\n---FINAL BATCH TUTOR CATEGORIZATION RESULTS (main test)---")
+    for desc, category in results_tutor.items():
+        print(f"Description: '{desc}' -> Category: '{category}'")

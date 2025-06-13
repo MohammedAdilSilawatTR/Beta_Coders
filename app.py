@@ -10,10 +10,10 @@ from datetime import datetime # Added for datetime conversion
 
 # Attempt to import the categorization function
 try:
-    from agentic import get_transaction_category
+    from agentic import get_batch_categories # UPDATED to get_batch_categories
 except ImportError:
-    print("WARN: agentic.py or get_transaction_category not found. Categorization endpoint will not work.")
-    get_transaction_category = None
+    print("WARN: agentic.py or get_batch_categories not found. Categorization endpoint will not work.")
+    get_batch_categories = None # UPDATED to get_batch_categories
 
 app = FastAPI()
 
@@ -197,42 +197,50 @@ class CategorizationRequest(BaseModel):
 
 @app.post("/categorize-transactions/")
 async def categorize_transactions_endpoint(request: CategorizationRequest):
-    if not get_transaction_category:
+    if not get_batch_categories: # UPDATED check
         raise HTTPException(status_code=501, detail="Categorization service is not available due to import error.")
 
-    categorized_transactions = []
-    for transaction in request.mapped_transactions:
-        # Ensure transactionDescription exists and is a string
-        desc = transaction.get("transactionDescription")
-        if not isinstance(desc, str) or not desc.strip():
-            # Handle missing or empty transaction description
-            # Option 1: Skip categorization for this transaction
-            # Option 2: Assign a default category like "Missing Description"
-            # Option 3: Return an error or include a note in the response
-            # For now, let's add it with a default category or skip, depending on strictness.
-            # Here, we'll add it with a note that it couldn't be categorized.
-            categorized_transaction = transaction.copy()
-            categorized_transaction["category"] = "Missing or Invalid Description"
-            categorized_transactions.append(categorized_transaction)
-            print(f"Skipping categorization for transaction due to missing/invalid description: {transaction}")
-            continue
+    # Collect all valid transaction descriptions for batch processing
+    descriptions_to_categorize = []
+    original_indices_map = {} # To map description back to its original transaction object if needed, or just iterate later
 
+    for i, transaction_data_dict in enumerate(request.mapped_transactions):
+        desc = transaction_data_dict.get("transactionDescription")
+        if isinstance(desc, str) and desc.strip():
+            descriptions_to_categorize.append(desc)
+            # If descriptions are not unique, this map might lose some original contexts.
+            # Assuming for now that we will iterate through original transactions and use the map.
+            # original_indices_map[desc] = i # Example if needed for direct update
+
+    category_map = {}
+    if descriptions_to_categorize:
+        print(f"Sending batch of {len(descriptions_to_categorize)} descriptions for categorization with business: '{request.business_description}'")
         try:
-            print(f"Categorizing transaction: '{desc}' for business: '{request.business_description}'")
-            category = get_transaction_category(
+            # Assuming get_batch_categories is a synchronous function as defined.
+            # If it were async, this would need 'await'.
+            category_map = get_batch_categories(
                 business_query=request.business_description,
-                transaction_description_text=desc
+                descriptions_list=descriptions_to_categorize
             )
-            categorized_transaction = transaction.copy() # Start with original transaction data
-            categorized_transaction["category"] = category # Add the new category
-            categorized_transactions.append(categorized_transaction)
+            print(f"Received category map: {category_map}")
         except Exception as e:
-            print(f"Error categorizing transaction '{desc}': {e}")
-            # Handle error for individual transaction, e.g., add it with an error category
-            categorized_transaction = transaction.copy()
-            categorized_transaction["category"] = f"Error: {str(e)}"
-            categorized_transactions.append(categorized_transaction)
-            # Optionally, re-raise if one error should stop the whole process,
-            # or collect errors and return them. For now, we continue.
+            print(f"Error calling get_batch_categories: {e}")
+            # Fallback: mark all descriptions in this batch with an error
+            category_map = {desc: f"Error during batch categorization: {str(e)}" for desc in descriptions_to_categorize}
+    
+    # Update each transaction in the original list using the category_map
+    final_categorized_transactions = []
+    for transaction_data_dict in request.mapped_transactions:
+        desc = transaction_data_dict.get("transactionDescription")
+        category_to_assign = "Missing or Invalid Description" # Default for invalid/missing descriptions
 
-    return categorized_transactions
+        if isinstance(desc, str) and desc.strip():
+            # If description was valid, get its category from the map.
+            # Default to "Uncategorized" if not found in map (e.g., LLM didn't return it or error).
+            category_to_assign = category_map.get(desc, "Uncategorized")
+        
+        updated_transaction = transaction_data_dict.copy()
+        updated_transaction["category"] = category_to_assign
+        final_categorized_transactions.append(updated_transaction)
+
+    return final_categorized_transactions
