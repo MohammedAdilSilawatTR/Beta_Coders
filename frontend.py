@@ -6,7 +6,7 @@ import time # Added import for time tracking
 
 st.set_page_config(page_title="Smart AI Mapping", page_icon="🤖", layout="wide")
 
-st.title("Simple Mapping and Categorization Tool 🤖")
+st.title("AI Mapping and Categorization Tool 🤖")
 
 # Initialize session state variables if they don't exist
 if 'business_description' not in st.session_state:
@@ -21,6 +21,8 @@ if 'df_display' not in st.session_state:
     st.session_state.df_display = pd.DataFrame()
 if 'df_categorized_display' not in st.session_state: # New session state for categorized table
     st.session_state.df_categorized_display = pd.DataFrame()
+if 'df_category_summary' not in st.session_state: # New session state for category summary table
+    st.session_state.df_category_summary = pd.DataFrame()
 if 'data_rows' not in st.session_state: # to store raw data_rows from uploadfile
     st.session_state.data_rows = []
 
@@ -56,8 +58,8 @@ if uploaded_file is not None:
                 st.session_state.data_rows = response_data.get("non_empty_rows", []) 
                 st.session_state.llm_header_mapping = response_data.get("header_mapping", {})
 
-                st.subheader("LLM Header Mapping Received:")
-                st.json(st.session_state.llm_header_mapping)
+                # NOTE: The display logic for LLM Header Mapping will be moved outside this button's scope
+                # to ensure it persists across reruns.
 
                 if not st.session_state.data_rows:
                     st.info("No data rows received from backend to display.")
@@ -118,6 +120,15 @@ if uploaded_file is not None:
             st.error(f"An unexpected error occurred: {e}")
             st.session_state.transformed_data_for_table = []
             st.session_state.df_display = pd.DataFrame()
+
+# Display LLM Header Mapping if it exists in session state
+if 'llm_header_mapping' in st.session_state and st.session_state.llm_header_mapping:
+    st.subheader("LLM Header Mapping:") # Changed subheader slightly for clarity
+    # Convert mapping to a list of dictionaries for DataFrame creation
+    mapping_list_for_df = [{"Predefined Column": key, "Mapped Excel Header": value} 
+                           for key, value in st.session_state.llm_header_mapping.items()]
+    df_mapping = pd.DataFrame(mapping_list_for_df)
+    st.dataframe(df_mapping, width=500)
 
 # This section is now outside the "Upload and Map Headers" button's conditional block
 # It will run on every script rerun, displaying data if it exists in session_state
@@ -208,3 +219,24 @@ elif uploaded_file and not st.session_state.transformed_data_for_table and st.se
 if 'df_categorized_display' in st.session_state and not st.session_state.df_categorized_display.empty:
     st.subheader("Categorized Data Table:")
     st.dataframe(st.session_state.df_categorized_display)
+
+    # Calculate and store category summary
+    try:
+        df_summary = st.session_state.df_categorized_display.copy()
+        # Ensure 'amount' column exists and is numeric for summation
+        if 'amount' in df_summary.columns:
+            df_summary['amount'] = pd.to_numeric(df_summary['amount'], errors='coerce').fillna(0)
+            category_summary = df_summary.groupby('category')['amount'].sum().reset_index()
+            category_summary.columns = ['Category', 'Total Amount'] # Rename columns
+            st.session_state.df_category_summary = category_summary
+        else:
+            st.warning("The 'amount' column is missing, cannot calculate category summary.")
+            st.session_state.df_category_summary = pd.DataFrame() # Clear or set to empty
+    except Exception as e:
+        st.error(f"Error calculating category summary: {e}")
+        st.session_state.df_category_summary = pd.DataFrame() # Clear or set to empty
+
+# Display the category summary table if it exists
+if 'df_category_summary' in st.session_state and not st.session_state.df_category_summary.empty:
+    st.subheader("Category Summary:")
+    st.dataframe(st.session_state.df_category_summary, width=500)
