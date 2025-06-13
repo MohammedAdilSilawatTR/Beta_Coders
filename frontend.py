@@ -6,7 +6,7 @@ import time # Added import for time tracking
 
 st.set_page_config(page_title="Smart AI Mapping", page_icon="🤖", layout="wide")
 
-st.title("Excel File Uploader")
+st.title("Simple Mapping and Categorization Tool 🤖")
 
 # Initialize session state variables if they don't exist
 if 'business_description' not in st.session_state:
