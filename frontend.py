@@ -119,7 +119,7 @@ if uploaded_file is not None:
 # It will run on every script rerun, displaying data if it exists in session_state
 
 if not st.session_state.df_display.empty:
-    st.subheader("Mapped Data Table:")
+    st.subheader("Column Mapped Data Table:")
     # Ensure columns are displayed in the order derived from LLM mapping keys plus 'Category' if it exists
     llm_cols = list(st.session_state.llm_header_mapping.keys())
     display_df_cols = [col for col in llm_cols if col in st.session_state.df_display.columns]
