@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import pandas as pd # Import pandas for DataFrame
+import json # Added import
+import json
 
 st.set_page_config(page_title="Smart AI Mapping", page_icon="🤖", layout="wide")
 
@@ -17,6 +19,8 @@ if 'llm_header_mapping' not in st.session_state:
     st.session_state.llm_header_mapping = {}
 if 'df_display' not in st.session_state:
     st.session_state.df_display = pd.DataFrame()
+if 'df_categorized_display' not in st.session_state: # New session state for categorized table
+    st.session_state.df_categorized_display = pd.DataFrame()
 if 'data_rows' not in st.session_state: # to store raw data_rows from uploadfile
     st.session_state.data_rows = []
 
@@ -134,11 +138,9 @@ if not st.session_state.df_display.empty:
     if st.button("Categorize Transactions"):
         if not st.session_state.business_description.strip():
             st.warning("Please enter a business description for categorization.")
-        # transformed_data_for_table should be used for payload, not df_display which might have formatted dates
         elif not st.session_state.transformed_data_for_table: 
             st.warning("No mapped transaction data available to categorize.")
         else:
-            # Prepare payload using the data as it was transformed (before display formatting)
             payload = {
                 "business_description": st.session_state.business_description,
                 "mapped_transactions": st.session_state.transformed_data_for_table 
@@ -149,31 +151,43 @@ if not st.session_state.df_display.empty:
                 
                 if categorize_response.status_code == 200:
                     st.success("Transactions categorized successfully!")
-                    categorized_data = categorize_response.json()
-                    
-                    # Update the DataFrame in session state with the new 'category' column
-                    df_updated = pd.DataFrame(categorized_data)
+                    try:
+                        categorized_data = categorize_response.json()
+                    except json.JSONDecodeError as json_e:
+                        st.error(f"Failed to parse JSON response from backend: {json_e}")
+                        st.exception(json_e)
+                        categorized_data = None
 
-                    # Re-apply date formatting if needed, as it might be lost during JSON conversion
-                    date_column_name = "transactionDate"
-                    if date_column_name in df_updated.columns:
-                        # Ensure it's string before converting, as backend sends ISO strings
-                        df_updated[date_column_name] = df_updated[date_column_name].astype(str) 
-                        df_updated[date_column_name] = pd.to_datetime(df_updated[date_column_name], errors='coerce')
-                        if pd.api.types.is_datetime64_any_dtype(df_updated[date_column_name]):
-                             df_updated[date_column_name] = df_updated[date_column_name].dt.strftime('%d/%m/%Y').fillna('')
-                    
-                    st.session_state.df_display = df_updated
-                    
-                    # Force re-run to display updated table
-                    st.rerun()
+                    if categorized_data:
+                        try:
+                            df_updated = pd.DataFrame(categorized_data)
+                        except Exception as df_e:
+                            st.error(f"Failed to create DataFrame from categorized_data: {df_e}")
+                            st.exception(df_e)
+                            df_updated = None
 
+                        if df_updated is not None:
+                            date_column_name = "transactionDate"
+                            if date_column_name in df_updated.columns:
+                                try:
+                                    df_updated[date_column_name] = df_updated[date_column_name].astype(str) 
+                                    df_updated[date_column_name] = pd.to_datetime(df_updated[date_column_name], errors='coerce')
+                                    if pd.api.types.is_datetime64_any_dtype(df_updated[date_column_name]):
+                                         df_updated[date_column_name] = df_updated[date_column_name].dt.strftime('%d/%m/%Y').fillna('')
+                                except Exception as date_fmt_e:
+                                    st.error(f"Error formatting date column '{date_column_name}': {date_fmt_e}")
+                                    st.exception(date_fmt_e)
+                            
+                            st.session_state.df_categorized_display = df_updated # Assign to new session state for categorized table
+                            # st.rerun() is removed/commented by user
                 else:
                     st.error(f"Failed to categorize transactions: {categorize_response.status_code} - {categorize_response.text}")
             except requests.exceptions.RequestException as e:
                 st.error(f"Error connecting to backend for categorization: {e}")
+                st.exception(e)
             except Exception as e:
                 st.error(f"An unexpected error occurred during categorization: {e}")
+                st.exception(e)
 
 elif uploaded_file and not st.session_state.transformed_data_for_table and st.session_state.llm_header_mapping:
     # This case handles when upload was successful but resulted in no data to transform/display
@@ -181,3 +195,8 @@ elif uploaded_file and not st.session_state.transformed_data_for_table and st.se
     # We ensure the "Categorize Transactions" button doesn't show if there's nothing to categorize.
     # An st.info message might have already been displayed during the upload process.
     pass
+
+# Display the categorized data table if it exists
+if 'df_categorized_display' in st.session_state and not st.session_state.df_categorized_display.empty:
+    st.subheader("Categorized Data Table:")
+    st.dataframe(st.session_state.df_categorized_display)
